@@ -1,6 +1,5 @@
 use crate::{
     config::{log_schema, DataType, SourceConfig, SourceContext, SourceDescription},
-    event::{LogEvent, Value},
     internal_events::{KafkaEventFailed, KafkaEventReceived, KafkaOffsetUpdateFailed},
     kafka::{KafkaAuthConfig, KafkaStatisticsContext},
     shutdown::ShutdownSignal,
@@ -12,12 +11,14 @@ use futures::{SinkExt, StreamExt};
 use rdkafka::{
     config::ClientConfig,
     consumer::{Consumer, StreamConsumer},
-    message::Headers,
-    message::Message,
+    message::{BorrowedMessage, Headers, Message},
+    Offset, TopicPartitionList,
 };
 use serde::{Deserialize, Serialize};
 use snafu::{ResultExt, Snafu};
-use std::{collections::BTreeMap, collections::HashMap};
+use std::collections::{hash_map::Entry, BTreeMap, HashMap};
+use std::sync::{Arc, Mutex};
+use vector_core::event::{BatchNotifier, BatchStatusReceiver, LogEvent, Value};
 
 #[derive(Debug, Snafu)]
 enum BuildError {
@@ -119,6 +120,7 @@ impl SourceConfig for KafkaSourceConfig {
             self.headers_key.clone(),
             cx.shutdown,
             cx.out,
+            cx.acknowledgements,
         )))
     }
 
@@ -140,8 +142,11 @@ async fn kafka_source(
     headers_key: String,
     shutdown: ShutdownSignal,
     mut out: Pipeline,
+    acknowledgements: bool,
 ) -> Result<(), ()> {
+    let consumer = Arc::new(consumer);
     let mut stream = consumer.stream().take_until(shutdown);
+    let mut committer = Committer::new(Arc::clone(&consumer));
 
     while let Some(message) = stream.next().await {
         match message {
@@ -202,19 +207,123 @@ async fn kafka_source(
                 }
                 log.insert(&headers_key, Value::from(headers_map));
 
+                let receiver = if acknowledgements {
+                    let (batch, receiver) = BatchNotifier::new_with_receiver();
+                    log = log.with_batch_notifier(&batch);
+                    Some(receiver)
+                } else {
+                    None
+                };
+
                 match out.send(log.into()).await {
                     Err(error) => error!(message = "Error sending to sink.", %error),
-                    Ok(_) => {
-                        if let Err(error) = consumer.store_offset(&msg) {
-                            emit!(KafkaOffsetUpdateFailed { error });
+                    Ok(_) => match receiver {
+                        Some(receiver) => committer.push(msg, receiver),
+                        None => {
+                            if let Err(error) = consumer.store_offset(&msg) {
+                                emit!(KafkaOffsetUpdateFailed { error });
+                            }
                         }
-                    }
+                    },
                 }
             }
         }
     }
 
     Ok(())
+}
+
+#[derive(Debug)]
+struct CommitterEntry {
+    done: bool,
+    topic: String,
+    partition: i32,
+    offset: i64,
+}
+
+impl<'a> From<BorrowedMessage<'a>> for CommitterEntry {
+    fn from(msg: BorrowedMessage<'a>) -> Self {
+        Self {
+            done: false,
+            topic: msg.topic().into(),
+            partition: msg.partition(),
+            offset: msg.offset(),
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct CommitterStore {
+    next: u64,
+    map: HashMap<u64, CommitterEntry>,
+}
+
+impl CommitterStore {
+    fn extract_topic_partition_list(&mut self) -> Option<TopicPartitionList> {
+        // Collect all the message offsets that can be stored by this one being finalied.
+        let mut next = self.next;
+        let mut result = None;
+        while let Entry::Occupied(entry) = self.map.entry(next) {
+            if !entry.get().done {
+                break;
+            }
+            let entry = entry.remove();
+            result
+                .get_or_insert_with(TopicPartitionList::new)
+                .add_partition(&entry.topic, entry.partition)
+                .set_offset(Offset::from_raw(entry.offset + 1)) // FIXME why does the +1 make it work?
+                .expect("Setting offset failed");
+            next += 1;
+        }
+        self.next = next;
+        result
+    }
+}
+
+struct Committer {
+    consumer: Arc<StreamConsumer<KafkaStatisticsContext>>,
+    order: u64,
+    store: Arc<Mutex<CommitterStore>>,
+}
+
+impl Committer {
+    fn new(consumer: Arc<StreamConsumer<KafkaStatisticsContext>>) -> Self {
+        Self {
+            consumer,
+            order: 0,
+            store: Default::default(),
+        }
+    }
+
+    fn push(&mut self, msg: BorrowedMessage<'_>, receiver: BatchStatusReceiver) {
+        const LOCK_ERROR: &str = "Poisoned Kafka commit store lock";
+
+        let order = self.order;
+        self.order += 1;
+
+        let mut store = self.store.lock().expect(LOCK_ERROR);
+        store.map.insert(order, msg.into());
+        drop(store); // Unlock the store ASAP
+
+        let store = Arc::clone(&self.store);
+        let consumer = Arc::clone(&self.consumer);
+        tokio::spawn(async move {
+            let _status = receiver.await;
+            let mut store = store.lock().expect(LOCK_ERROR);
+            // This entry should never be removed before this step, but be safe anyways.
+            if let Some(entry) = store.map.get_mut(&order) {
+                entry.done = true;
+            }
+
+            let tpl = store.extract_topic_partition_list();
+            drop(store); // Unlock the store before calling to kafka
+            if let Some(tpl) = tpl {
+                if let Err(error) = consumer.store_offsets(&tpl) {
+                    emit!(KafkaOffsetUpdateFailed { error });
+                }
+            }
+        });
+    }
 }
 
 fn create_consumer(
@@ -310,44 +419,63 @@ mod integration_test {
     };
     use chrono::{SubsecRound, Utc};
     use rdkafka::{
-        config::ClientConfig,
+        config::{ClientConfig, FromClientConfig},
+        consumer::BaseConsumer,
         message::OwnedHeaders,
         producer::{FutureProducer, FutureRecord},
         util::Timeout,
     };
+    use std::time::Duration;
+    use vector_core::event::EventStatus;
 
     const BOOTSTRAP_SERVER: &str = "localhost:9091";
 
-    async fn send_event(
+    fn client_config<T: FromClientConfig>() -> T {
+        ClientConfig::new()
+            .set("bootstrap.servers", BOOTSTRAP_SERVER)
+            .set("produce.offset.report", "true")
+            .set("message.timeout.ms", "5000")
+            .create()
+            .expect("Producer creation error")
+    }
+
+    async fn send_events(
         topic: String,
+        count: usize,
         key: &str,
         text: &str,
         timestamp: i64,
         header_key: &str,
         header_value: &str,
     ) {
-        let producer: FutureProducer = ClientConfig::new()
-            .set("bootstrap.servers", BOOTSTRAP_SERVER)
-            .set("produce.offset.report", "true")
-            .set("message.timeout.ms", "5000")
-            .create()
-            .expect("Producer creation error");
+        let producer: FutureProducer = client_config();
 
-        let record = FutureRecord::to(&topic)
-            .payload(text)
-            .key(key)
-            .timestamp(timestamp)
-            .headers(OwnedHeaders::new().add(header_key, header_value));
+        for i in 0..count {
+            let text = format!("{} {}", text, i);
+            let record = FutureRecord::to(&topic)
+                .payload(&text)
+                .key(key)
+                .timestamp(timestamp)
+                .headers(OwnedHeaders::new().add(header_key, header_value));
 
-        if let Err(error) = producer.send(record, Timeout::Never).await {
-            panic!("Cannot send event to Kafka: {:?}", error);
+            if let Err(error) = producer.send(record, Timeout::Never).await {
+                panic!("Cannot send event to Kafka: {:?}", error);
+            }
         }
     }
 
     #[tokio::test]
-    async fn kafka_source_consume_event() {
+    async fn consumes_event_with_acknowledgements() {
+        consume_event(true).await;
+    }
+
+    #[tokio::test]
+    async fn consumes_event_without_acknowledgements() {
+        consume_event(false).await;
+    }
+
+    async fn consume_event(acknowledgements: bool) {
         let topic = format!("test-topic-{}", random_string(10));
-        println!("Test topic name: {}", topic);
         let group_id = format!("test-group-{}", random_string(10));
         let now = Utc::now();
 
@@ -368,9 +496,9 @@ mod integration_test {
             ..Default::default()
         };
 
-        println!("Sending event...");
-        send_event(
+        send_events(
             topic.clone(),
+            10,
             "my key",
             "my message",
             now.timestamp_millis(),
@@ -379,8 +507,7 @@ mod integration_test {
         )
         .await;
 
-        println!("Receiving event...");
-        let (tx, rx) = Pipeline::new_test();
+        let (tx, rx) = Pipeline::new_test_finalize(EventStatus::Delivered);
         let consumer = create_consumer(&config).unwrap();
         tokio::spawn(kafka_source(
             consumer,
@@ -391,28 +518,36 @@ mod integration_test {
             config.headers_key,
             ShutdownSignal::noop(),
             tx,
+            acknowledgements,
         ));
-        let events = collect_n(rx, 1).await;
-        println!("Received event  {:?}", events[0].as_log());
+        let events = collect_n(rx, 10).await;
 
-        assert_eq!(
-            events[0].as_log()[log_schema().message_key()],
-            "my message".into()
-        );
-        assert_eq!(events[0].as_log()["message_key"], "my key".into());
-        assert_eq!(
-            events[0].as_log()[log_schema().source_type_key()],
-            "kafka".into()
-        );
-        assert_eq!(
-            events[0].as_log()[log_schema().timestamp_key()],
-            now.trunc_subsecs(3).into()
-        );
-        assert_eq!(events[0].as_log()["topic"], topic.into());
-        assert!(events[0].as_log().contains("partition"));
-        assert!(events[0].as_log().contains("offset"));
-        let mut expected_headers = BTreeMap::new();
-        expected_headers.insert("my header".to_string(), Value::from("my header value"));
-        assert_eq!(events[0].as_log()["headers"], Value::from(expected_headers));
+        let client: BaseConsumer = client_config();
+        let watermarks = client
+            .fetch_watermarks(&topic, 0, Duration::from_secs(1))
+            .expect("Could not fetch watermarks");
+        assert_eq!(watermarks, (0, 10));
+
+        for i in 0..10 {
+            assert_eq!(
+                events[i].as_log()[log_schema().message_key()],
+                format!("my message {}", i).into()
+            );
+            assert_eq!(events[i].as_log()["message_key"], "my key".into());
+            assert_eq!(
+                events[i].as_log()[log_schema().source_type_key()],
+                "kafka".into()
+            );
+            assert_eq!(
+                events[i].as_log()[log_schema().timestamp_key()],
+                now.trunc_subsecs(3).into()
+            );
+            assert_eq!(events[i].as_log()["topic"], topic.clone().into());
+            assert!(events[i].as_log().contains("partition"));
+            assert!(events[i].as_log().contains("offset"));
+            let mut expected_headers = BTreeMap::new();
+            expected_headers.insert("my header".to_string(), Value::from("my header value"));
+            assert_eq!(events[i].as_log()["headers"], Value::from(expected_headers));
+        }
     }
 }
