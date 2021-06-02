@@ -40,6 +40,7 @@ criterion = "0.3"
 
 [features]
 default = [
+    "add_datadog_tags",
     "append",
     "array",
     "assert",
@@ -142,6 +143,7 @@ default = [
     "uuid_v4",
 ]
 
+add_datadog_tags = []
 append = []
 array = []
 assert = []
