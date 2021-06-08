@@ -252,6 +252,9 @@ impl<'a> From<BorrowedMessage<'a>> for CommitterEntry {
     }
 }
 
+/// The `CommitterStore` tracks the messages received from Kafka along
+/// with a flag indicating if they have been finalized, which is used by
+/// `struct Committer` to asynchronously store offsets with the source.
 #[derive(Debug, Default)]
 struct CommitterStore {
     first: u64,
@@ -259,12 +262,16 @@ struct CommitterStore {
 }
 
 impl CommitterStore {
+    /// Add the needed data from the given message into the store and
+    /// return the index.
     fn add_msg(&mut self, msg: BorrowedMessage<'_>) -> u64 {
         self.entries.push_back(msg.into());
         self.first + self.entries.len() as u64
     }
 
     fn mark_done(&mut self, index: u64) {
+        // Under normal usage, both of these conditions should be true,
+        // but they are guarded to avoid panics.
         if index >= self.first {
             let offset = (index - self.first) as usize;
             if let Some(entry) = self.entries.get_mut(offset) {
@@ -273,7 +280,9 @@ impl CommitterStore {
         }
     }
 
-    // Collect all the message offsets that can be stored because of being finalized
+    /// Collect all the message offsets at the front of the queue that
+    /// can be stored because of being finalized. Returns `None` if
+    /// there is no work to be done.
     fn extract_topic_partition_list(&mut self) -> Option<TopicPartitionList> {
         let mut result = None;
         while let Some(entry) = self.entries.front() {
@@ -292,6 +301,7 @@ impl CommitterStore {
     }
 }
 
+/// The `Committer` is a wrapper to handle asynchronous offset write-backs.
 struct Committer {
     consumer: Arc<StreamConsumer<KafkaStatisticsContext>>,
     store: Arc<Mutex<CommitterStore>>,
