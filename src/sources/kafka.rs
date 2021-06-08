@@ -16,7 +16,7 @@ use rdkafka::{
 };
 use serde::{Deserialize, Serialize};
 use snafu::{ResultExt, Snafu};
-use std::collections::{hash_map::Entry, BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use vector_core::event::{BatchNotifier, BatchStatusReceiver, LogEvent, Value};
 
@@ -254,35 +254,46 @@ impl<'a> From<BorrowedMessage<'a>> for CommitterEntry {
 
 #[derive(Debug, Default)]
 struct CommitterStore {
-    next: u64,
-    map: HashMap<u64, CommitterEntry>,
+    first: u64,
+    entries: VecDeque<CommitterEntry>,
 }
 
 impl CommitterStore {
+    fn add_msg(&mut self, msg: BorrowedMessage<'_>) -> u64 {
+        self.entries.push_back(msg.into());
+        self.first + self.entries.len() as u64
+    }
+
+    fn mark_done(&mut self, index: u64) {
+        if index >= self.first {
+            let offset = (index - self.first) as usize;
+            if let Some(entry) = self.entries.get_mut(offset) {
+                entry.done = true;
+            }
+        }
+    }
+
+    // Collect all the message offsets that can be stored because of being finalized
     fn extract_topic_partition_list(&mut self) -> Option<TopicPartitionList> {
-        // Collect all the message offsets that can be stored by this one being finalied.
-        let mut next = self.next;
         let mut result = None;
-        while let Entry::Occupied(entry) = self.map.entry(next) {
-            if !entry.get().done {
+        while let Some(entry) = self.entries.front() {
+            if !entry.done {
                 break;
             }
-            let entry = entry.remove();
+            let entry = self.entries.pop_front().unwrap();
             result
                 .get_or_insert_with(TopicPartitionList::new)
                 .add_partition(&entry.topic, entry.partition)
                 .set_offset(Offset::from_raw(entry.offset + 1)) // FIXME why does the +1 make it work?
                 .expect("Setting offset failed");
-            next += 1;
+            self.first += 1;
         }
-        self.next = next;
         result
     }
 }
 
 struct Committer {
     consumer: Arc<StreamConsumer<KafkaStatisticsContext>>,
-    order: u64,
     store: Arc<Mutex<CommitterStore>>,
 }
 
@@ -290,7 +301,6 @@ impl Committer {
     fn new(consumer: Arc<StreamConsumer<KafkaStatisticsContext>>) -> Self {
         Self {
             consumer,
-            order: 0,
             store: Default::default(),
         }
     }
@@ -298,11 +308,8 @@ impl Committer {
     fn push(&mut self, msg: BorrowedMessage<'_>, receiver: BatchStatusReceiver) {
         const LOCK_ERROR: &str = "Poisoned Kafka commit store lock";
 
-        let order = self.order;
-        self.order += 1;
-
         let mut store = self.store.lock().expect(LOCK_ERROR);
-        store.map.insert(order, msg.into());
+        let index = store.add_msg(msg);
         drop(store); // Unlock the store ASAP
 
         let store = Arc::clone(&self.store);
@@ -310,10 +317,7 @@ impl Committer {
         tokio::spawn(async move {
             let _status = receiver.await;
             let mut store = store.lock().expect(LOCK_ERROR);
-            // This entry should never be removed before this step, but be safe anyways.
-            if let Some(entry) = store.map.get_mut(&order) {
-                entry.done = true;
-            }
+            store.mark_done(index);
 
             let tpl = store.extract_topic_partition_list();
             drop(store); // Unlock the store before calling to kafka
