@@ -528,26 +528,27 @@ mod integration_test {
             .expect("Could not fetch watermarks");
         assert_eq!(watermarks, (0, 10));
 
-        for i in 0..10 {
+        assert_eq!(events.len(), 10);
+        for (i, event) in events.into_iter().enumerate() {
             assert_eq!(
-                events[i].as_log()[log_schema().message_key()],
+                event.as_log()[log_schema().message_key()],
                 format!("my message {}", i).into()
             );
-            assert_eq!(events[i].as_log()["message_key"], "my key".into());
+            assert_eq!(event.as_log()["message_key"], "my key".into());
             assert_eq!(
-                events[i].as_log()[log_schema().source_type_key()],
+                event.as_log()[log_schema().source_type_key()],
                 "kafka".into()
             );
             assert_eq!(
-                events[i].as_log()[log_schema().timestamp_key()],
+                event.as_log()[log_schema().timestamp_key()],
                 now.trunc_subsecs(3).into()
             );
-            assert_eq!(events[i].as_log()["topic"], topic.clone().into());
-            assert!(events[i].as_log().contains("partition"));
-            assert!(events[i].as_log().contains("offset"));
+            assert_eq!(event.as_log()["topic"], topic.clone().into());
+            assert!(event.as_log().contains("partition"));
+            assert!(event.as_log().contains("offset"));
             let mut expected_headers = BTreeMap::new();
             expected_headers.insert("my header".to_string(), Value::from("my header value"));
-            assert_eq!(events[i].as_log()["headers"], Value::from(expected_headers));
+            assert_eq!(event.as_log()["headers"], Value::from(expected_headers));
         }
     }
 }
