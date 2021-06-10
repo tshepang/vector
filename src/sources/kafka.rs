@@ -265,8 +265,9 @@ impl CommitterStore {
     /// Add the needed data from the given message into the store and
     /// return the index.
     fn add_msg(&mut self, msg: BorrowedMessage<'_>) -> u64 {
+        let index = self.first + self.entries.len() as u64;
         self.entries.push_back(msg.into());
-        self.first + self.entries.len() as u64
+        index
     }
 
     fn mark_done(&mut self, index: u64) {
