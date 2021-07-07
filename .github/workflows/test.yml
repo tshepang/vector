@@ -36,6 +36,8 @@ jobs:
       # Set job outputs to values from filter step
       outputs:
         source: ${{ steps.filter.outputs.source }}
+        docs: ${{ steps.filter.outputs.docs }}
+        markdown: ${{ steps.filter.outputs.markdown }}
         dependencies: ${{ steps.filter.outputs.dependencies }}
         internal_events: ${{ steps.filter.outputs.internal_events }}
         helm: ${{ steps.filter.outputs.helm }}
@@ -62,6 +64,10 @@ jobs:
               - "rust-toolchain"
             deny:
               - 'deny.toml'
+            docs:
+              - 'docs/**'
+            markdown:
+              - '**/**.md'
             dependencies:
               - 'Cargo.toml'
               - 'Cargo.lock'
@@ -326,6 +332,12 @@ jobs:
         run: echo "::add-matcher::.github/matchers/rust.json"
       - name: Make slim-builds
         run: make slim-builds
+      - name: Check markdown
+        if: needs.changes.outputs.markdown == 'true' || needs.changes.outputs.source == 'true'
+        run: make check-markdown
+      - name: Check Cue docs
+        if: needs.changes.outputs.docs == 'true' || needs.changes.outputs.source == 'true'
+        run: make check-docs
       - name: Check code format || needs.changes.outputs.source == 'true'
         if: needs.changes.outputs.source == 'true'
         run: make check-fmt

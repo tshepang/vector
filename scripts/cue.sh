@@ -7,11 +7,10 @@ set -euo pipefail
 #
 #   CUE utilities.
 
-ROOT=$(git rev-parse --show-toplevel)
-CUE_SOURCES="${ROOT}/docs/cue"
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 list-docs-files() {
-  find "${CUE_SOURCES}" -name '*.cue'
+  find docs -name '*.cue'
 }
 
 cmd_list() {
