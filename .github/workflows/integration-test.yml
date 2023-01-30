@@ -51,7 +51,7 @@ jobs:
     steps:
       - uses: actions/checkout@v2.3.4
       - run: make ci-sweep
-      - uses: actions/cache@v2.1.6
+      - uses: actions/cache@v3.2.4
         with:
           path: |
             ~/.cargo/registry
@@ -69,7 +69,7 @@ jobs:
     steps:
       - uses: actions/checkout@v2.3.4
       - run: make ci-sweep
-      - uses: actions/cache@v2.1.6
+      - uses: actions/cache@v3.2.4
         with:
           path: |
             ~/.cargo/registry
@@ -86,7 +86,7 @@ jobs:
     steps:
       - uses: actions/checkout@v2
       - run: make ci-sweep
-      - uses: actions/cache@v2.1.4
+      - uses: actions/cache@v3.2.4
         with:
           path: |
             ~/.cargo/registry
@@ -104,7 +104,7 @@ jobs:
     steps:
       - uses: actions/checkout@v2.3.4
       - run: make ci-sweep
-      - uses: actions/cache@v2.1.6
+      - uses: actions/cache@v3.2.4
         with:
           path: |
             ~/.cargo/registry
@@ -122,7 +122,7 @@ jobs:
     steps:
       - uses: actions/checkout@v2.3.4
       - run: make ci-sweep
-      - uses: actions/cache@v2.1.6
+      - uses: actions/cache@v3.2.4
         with:
           path: |
             ~/.cargo/registry
@@ -140,7 +140,7 @@ jobs:
     steps:
       - uses: actions/checkout@v2.3.4
       - run: make ci-sweep
-      - uses: actions/cache@v2.1.5
+      - uses: actions/cache@v3.2.4
         with:
           path: |
             ~/.cargo/registry
@@ -159,7 +159,7 @@ jobs:
     steps:
       - uses: actions/checkout@v2.3.4
       - run: make ci-sweep
-      - uses: actions/cache@v2.1.6
+      - uses: actions/cache@v3.2.4
         with:
           path: |
             ~/.cargo/registry
@@ -177,7 +177,7 @@ jobs:
     steps:
       - uses: actions/checkout@v2.3.4
       - run: make ci-sweep
-      - uses: actions/cache@v2.1.6
+      - uses: actions/cache@v3.2.4
         with:
           path: |
             ~/.cargo/registry
@@ -195,7 +195,7 @@ jobs:
     steps:
       - uses: actions/checkout@v2.3.4
       - run: make ci-sweep
-      - uses: actions/cache@v2.1.6
+      - uses: actions/cache@v3.2.4
         with:
           path: |
             ~/.cargo/registry
@@ -213,7 +213,7 @@ jobs:
     steps:
       - uses: actions/checkout@v2.3.4
       - run: make ci-sweep
-      - uses: actions/cache@v2.1.6
+      - uses: actions/cache@v3.2.4
         with:
           path: |
             ~/.cargo/registry
@@ -231,7 +231,7 @@ jobs:
     steps:
       - uses: actions/checkout@v2.3.4
       - run: make ci-sweep
-      - uses: actions/cache@v2.1.5
+      - uses: actions/cache@v3.2.4
         with:
           path: |
             ~/.cargo/registry
@@ -249,7 +249,7 @@ jobs:
     steps:
       - uses: actions/checkout@v2.3.4
       - run: make ci-sweep
-      - uses: actions/cache@v2.1.6
+      - uses: actions/cache@v3.2.4
         with:
           path: |
             ~/.cargo/registry
@@ -267,7 +267,7 @@ jobs:
     steps:
       - uses: actions/checkout@v2.3.4
       - run: make ci-sweep
-      - uses: actions/cache@v2.1.6
+      - uses: actions/cache@v3.2.4
         with:
           path: |
             ~/.cargo/registry
@@ -285,7 +285,7 @@ jobs:
     steps:
       - uses: actions/checkout@v2.3.4
       - run: make ci-sweep
-      - uses: actions/cache@v2.1.6
+      - uses: actions/cache@v3.2.4
         with:
           path: |
             ~/.cargo/registry
@@ -303,7 +303,7 @@ jobs:
     steps:
       - uses: actions/checkout@v2.3.4
       - run: make ci-sweep
-      - uses: actions/cache@v2.1.6
+      - uses: actions/cache@v3.2.4
         with:
           path: |
             ~/.cargo/registry
@@ -321,7 +321,7 @@ jobs:
     steps:
       - uses: actions/checkout@v2.3.4
       - run: make ci-sweep
-      - uses: actions/cache@v2.1.6
+      - uses: actions/cache@v3.2.4
         with:
           path: |
             ~/.cargo/registry
@@ -339,7 +339,7 @@ jobs:
     steps:
       - uses: actions/checkout@v2.3.4
       - run: make ci-sweep
-      - uses: actions/cache@v2.1.6
+      - uses: actions/cache@v3.2.4
         with:
           path: |
             ~/.cargo/registry
@@ -357,7 +357,7 @@ jobs:
     steps:
       - uses: actions/checkout@v2.3.4
       - run: make ci-sweep
-      - uses: actions/cache@v2.1.6
+      - uses: actions/cache@v3.2.4
         with:
           path: |
             ~/.cargo/registry
@@ -375,7 +375,7 @@ jobs:
     steps:
       - uses: actions/checkout@v2.3.4
       - run: make ci-sweep
-      - uses: actions/cache@v2.1.6
+      - uses: actions/cache@v3.2.4
         with:
           path: |
             ~/.cargo/registry
